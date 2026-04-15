@@ -1,0 +1,17 @@
+openai-whisper
+librosa
+mediapipe
+opencv-python
+moviepy
+numpy
+torch
+soundfile
+ffmpeg-python
+pandas
+scikit-learn
+joblib
+tqdm
+kaggle
+albumentations
+Pillow
+torchvision

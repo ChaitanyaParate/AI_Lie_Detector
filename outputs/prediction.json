@@ -1,0 +1,25 @@
+{
+  "video_path": "/mnt/newvolume/Programming/Python/Deep_Learning/AI_Lie_Detector/W.mp4",
+  "model_path": "/mnt/newvolume/Programming/Python/Deep_Learning/AI_Lie_Detector/model_full.pt",
+  "prediction": {
+    "label_id": 1,
+    "label": "lie",
+    "prob_lie": 0.5672443952536254,
+    "threshold": 0.5
+  },
+  "features": {
+    "text_score": 0.0,
+    "audio_score": 0.19064856962986423,
+    "vision_score": 0.5,
+    "hesitation_score": 0.0,
+    "pitch_score": 0.21347707005557623,
+    "silence_score": 0.16782006920415224,
+    "blink_rate_per_min": 0.0,
+    "eye_movement_std": 17.205991585676074,
+    "blink_score": 0.0,
+    "eye_movement_score": 1.0,
+    "transcript_len": 51.0,
+    "has_transcript": 1.0
+  },
+  "transcript": "Halo. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Apa yang saya nak? Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih. Terima kasih."
+}
