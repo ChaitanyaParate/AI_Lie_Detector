@@ -15,3 +15,4 @@ kaggle
 albumentations
 Pillow
 torchvision
+sentence-transformers

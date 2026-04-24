@@ -22,6 +22,7 @@ from tqdm import tqdm
 from text_audio import TextAudioResult, analyze_text_audio
 from utils import extract_audio, extract_frames
 from vision import analyze_vision
+from model import DeceptionMLP
 
 DEFAULT_DATASET_ROOT = "/mnt/newvolume/Programming/Python/Deep_Learning/AI_Lie_Detector/Real-life Deception Detection Dataset With Train Test"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
@@ -39,41 +40,7 @@ def _default_output_path(name: str) -> str:
     return str(Path("outputs") / name)
 
 
-@dataclass
-class ExtractedSample:
-    split: str
-    video_path: str
-    label: int
-    text_score: float
-    audio_score: float
-    vision_score: float
-    hesitation_score: float
-    pitch_score: float
-    silence_score: float
-    blink_rate_per_min: float
-    eye_movement_std: float
-    blink_score: float
-    eye_movement_score: float
-    transcript_len: int
-    has_transcript: int
-
-
-class DeceptionMLP(nn.Module):
-    def __init__(self, input_dim: int) -> None:
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(32, 1),
-        )
-
-    def forward(self, x: torch.Tensor):
-        return self.net(x).squeeze(1)
-
+# Removed ExtractedSample dataclass to allow dynamic embedding columns
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a multimodal deception classifier on the Kaggle dataset.")
@@ -167,7 +134,7 @@ def extract_features_for_video(
     whisper_device: str,
     max_audio_seconds: float,
     vision_max_frames: int,
-) -> ExtractedSample | None:
+) -> dict[str, Any] | None:
     sample_id = video_path.stem
     sample_cache = cache_dir / split / sample_id
     sample_cache.mkdir(parents=True, exist_ok=True)
@@ -199,23 +166,28 @@ def extract_features_for_video(
         transcript_len = len(ta.transcript.split()) if ta.transcript else 0
         has_transcript = int(transcript_len > 0)
 
-        return ExtractedSample(
-            split=split,
-            video_path=str(video_path),
-            label=label,
-            text_score=ta.text_score,
-            audio_score=ta.audio_score,
-            vision_score=vi.vision_score,
-            hesitation_score=ta.hesitation_score,
-            pitch_score=ta.pitch_score,
-            silence_score=ta.silence_score,
-            blink_rate_per_min=vi.blink_rate_per_min,
-            eye_movement_std=vi.eye_movement_std,
-            blink_score=vi.blink_score,
-            eye_movement_score=vi.eye_movement_score,
-            transcript_len=transcript_len,
-            has_transcript=has_transcript,
-        )
+        result = {
+            "split": split,
+            "video_path": str(video_path),
+            "label": label,
+            "text_score": ta.text_score,
+            "audio_score": ta.audio_score,
+            "vision_score": vi.vision_score,
+            "hesitation_score": ta.hesitation_score,
+            "pitch_score": ta.pitch_score,
+            "silence_score": ta.silence_score,
+            "blink_rate_per_min": vi.blink_rate_per_min,
+            "eye_movement_std": vi.eye_movement_std,
+            "blink_score": vi.blink_score,
+            "eye_movement_score": vi.eye_movement_score,
+            "transcript_len": transcript_len,
+            "has_transcript": has_transcript,
+        }
+        
+        for i, val in enumerate(ta.transcript_embedding):
+            result[f"emb_{i}"] = val
+            
+        return result
     except Exception as exc:
         print(f"[WARN] Failed for {video_path.name}: {exc}")
         return None
@@ -235,7 +207,7 @@ def train_and_evaluate(df: pd.DataFrame, model_path: Path, metrics_path: Path, t
         "eye_movement_score",
         "transcript_len",
         "has_transcript",
-    ]
+    ] + [f"emb_{i}" for i in range(384)]
 
     train_df = df[df["split"] == "train"]
     test_df = df[df["split"] == "test"]
@@ -244,7 +216,10 @@ def train_and_evaluate(df: pd.DataFrame, model_path: Path, metrics_path: Path, t
         raise ValueError("No train samples available after label inference.")
 
     if test_df.empty or train_df["label"].nunique() < 2 or test_df["label"].nunique() < 2:
-        train_df, test_df = train_test_split(df, test_size=test_size, random_state=42, stratify=df["label"])
+        if len(df) < 10:
+            train_df, test_df = train_test_split(df, test_size=test_size, random_state=42)
+        else:
+            train_df, test_df = train_test_split(df, test_size=test_size, random_state=42, stratify=df["label"])
 
     X_train = train_df[feature_cols].fillna(0.0).to_numpy(dtype=np.float32)
     y_train = train_df["label"].to_numpy(dtype=np.int64)
@@ -261,7 +236,9 @@ def train_and_evaluate(df: pd.DataFrame, model_path: Path, metrics_path: Path, t
     X_train_t = torch.from_numpy(X_train_scaled)
     y_train_t = torch.from_numpy(y_train.astype(np.float32))
     train_ds = TensorDataset(X_train_t, y_train_t)
-    train_loader = DataLoader(train_ds, batch_size=min(32, len(train_ds)), shuffle=True)
+    batch_size = min(32, len(train_ds))
+    drop_last = (len(train_ds) > batch_size)  # Prevent BatchNorm crash if last batch is size 1
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=drop_last)
 
     pos_count = float((y_train == 1).sum())
     neg_count = float((y_train == 0).sum())
@@ -333,7 +310,7 @@ def main() -> None:
     if args.max_videos > 0:
         all_samples = balanced_subset(all_samples, args.max_videos)
 
-    extracted_rows: list[ExtractedSample] = []
+    extracted_rows: list[dict[str, Any]] = []
     skipped_no_label = 0
 
     for split, video_path in tqdm(all_samples, desc="Extracting features"):
@@ -359,7 +336,7 @@ def main() -> None:
     if not extracted_rows:
         raise ValueError("No labeled samples extracted. Check that file names contain lie/truth tokens.")
 
-    df = pd.DataFrame([asdict(r) for r in extracted_rows])
+    df = pd.DataFrame(extracted_rows)
 
     features_csv = Path(args.features_csv)
     features_csv.parent.mkdir(parents=True, exist_ok=True)

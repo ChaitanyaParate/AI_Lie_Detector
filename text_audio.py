@@ -7,11 +7,13 @@ from typing import Any
 import librosa
 import numpy as np
 import torch
+from sentence_transformers import SentenceTransformer
 
 from utils import minmax_normalize
 
 _WHISPER_WARNING_EMITTED = False
 _WHISPER_MODEL_CACHE: dict[tuple[str, str], Any] = {}
+_SENTENCE_MODEL = None
 
 FILLER_WORDS = {
     "um",
@@ -32,6 +34,7 @@ class TextAudioResult:
     silence_score: float
     text_score: float
     audio_score: float
+    transcript_embedding: list[float]
 
 
 def _clean_transcript(raw_text: str) -> str:
@@ -131,6 +134,16 @@ def compute_audio_scores(audio_path: str, max_audio_seconds: float | None = None
     return pitch_score, silence_score, audio_score
 
 
+def get_sentence_model():
+    global _SENTENCE_MODEL
+    if _SENTENCE_MODEL is None:
+        try:
+            _SENTENCE_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        except Exception as e:
+            print(f"[WARN] Failed to load SentenceTransformer: {e}")
+            return None
+    return _SENTENCE_MODEL
+
 def analyze_text_audio(
     audio_path: str,
     model_size: str = "base",
@@ -141,6 +154,13 @@ def analyze_text_audio(
     hesitation_score = compute_hesitation_score(transcript)
     pitch_score, silence_score, audio_score = compute_audio_scores(audio_path, max_audio_seconds=max_audio_seconds)
 
+    embed_model = get_sentence_model()
+    if embed_model is not None and transcript:
+        # returns numpy array of shape (384,)
+        embedding = embed_model.encode(transcript, show_progress_bar=False).tolist()
+    else:
+        embedding = [0.0] * 384
+
     return TextAudioResult(
         transcript=transcript,
         hesitation_score=hesitation_score,
@@ -148,4 +168,5 @@ def analyze_text_audio(
         silence_score=silence_score,
         text_score=hesitation_score,
         audio_score=audio_score,
+        transcript_embedding=embedding,
     )

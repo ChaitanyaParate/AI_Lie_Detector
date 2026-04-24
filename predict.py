@@ -12,6 +12,7 @@ import torch.nn as nn
 from text_audio import TextAudioResult, analyze_text_audio
 from utils import extract_audio, extract_frames
 from vision import analyze_vision
+from model import DeceptionMLP
 
 
 DEFAULT_FEATURE_COLS = [
@@ -27,24 +28,7 @@ DEFAULT_FEATURE_COLS = [
     "eye_movement_score",
     "transcript_len",
     "has_transcript",
-]
-
-
-class DeceptionMLP(nn.Module):
-    def __init__(self, input_dim: int) -> None:
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(32, 1),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x).squeeze(1)
+] + [f"emb_{i}" for i in range(384)]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -129,7 +113,7 @@ def extract_single_video_features(
     transcript_len = len(ta.transcript.split()) if ta.transcript else 0
     has_transcript = int(transcript_len > 0)
 
-    return {
+    result = {
         "text_score": float(ta.text_score),
         "audio_score": float(ta.audio_score),
         "vision_score": float(vi.vision_score),
@@ -144,6 +128,11 @@ def extract_single_video_features(
         "has_transcript": float(has_transcript),
         "transcript": ta.transcript,
     }
+    
+    for i, val in enumerate(ta.transcript_embedding):
+        result[f"emb_{i}"] = float(val)
+        
+    return result
 
 
 def main() -> None:
