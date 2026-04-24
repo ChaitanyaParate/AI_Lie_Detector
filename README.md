@@ -211,7 +211,4 @@ This project is licensed under the [MIT License](LICENSE).
 
 ---
 
-## Author
 
-**Chaitanya Parate**  
-[GitHub](https://github.com/ChaitanyaParate)
