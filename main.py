@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 
 from text_audio import TextAudioResult, analyze_text_audio
 from utils import extract_audio, extract_frames, weighted_fusion
 from vision import analyze_vision
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
@@ -44,6 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=[0.3, 0.3, 0.4],
         help="Fusion weights for text, audio, vision",
     )
+    parser.add_argument(
+        "--output-json",
+        default="",
+        help="Optional path to save the result JSON (prints to stdout by default)",
+    )
     return parser
 
 
@@ -77,19 +90,19 @@ def main() -> None:
     audio_path = str(work_dir / "audio.wav")
     frames_dir = str(work_dir / "frames")
 
-    print("[1/4] Extracting audio...")
+    logger.info("[1/4] Extracting audio...")
     has_audio = True
     try:
         extract_audio(str(video_path), audio_path)
     except ValueError as exc:
         has_audio = False
-        print(f"Warning: {exc} Falling back to text/audio scores = 0.0")
+        logger.warning("%s Falling back to text/audio scores = 0.0", exc)
 
-    print("[2/4] Extracting frames...")
+    logger.info("[2/4] Extracting frames...")
     frame_step = 3
     _, fps = extract_frames(str(video_path), frames_dir, frame_step=frame_step)
 
-    print("[3/4] Running text/audio analysis...")
+    logger.info("[3/4] Running text/audio analysis...")
     if has_audio:
         ta = analyze_text_audio(audio_path, model_size=args.whisper_model, whisper_device=args.whisper_device)
     else:
@@ -102,7 +115,7 @@ def main() -> None:
             audio_score=0.0,
         )
 
-    print("[4/4] Running vision analysis...")
+    logger.info("[4/4] Running vision analysis...")
     vi = analyze_vision(frames_dir, video_fps=fps, frame_step=frame_step)
 
     modality_scores = {
@@ -140,6 +153,12 @@ def main() -> None:
     }
 
     print(json.dumps(output, indent=2))
+
+    if args.output_json:
+        output_path = Path(args.output_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
+        logger.info("Result saved to %s", output_path)
 
 
 if __name__ == "__main__":

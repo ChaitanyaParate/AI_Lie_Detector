@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 from typing import Any
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
@@ -47,7 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_checkpoint(model_path: Path, device: torch.device) -> tuple[nn.Module, np.ndarray, np.ndarray, list[str]]:
-    checkpoint: dict[str, Any] = torch.load(model_path, map_location=device)
+    # weights_only=False is required to load the full checkpoint dict (scaler stats, feature_cols, etc.)
+    # Safe here because we control the checkpoint file ourselves.
+    checkpoint: dict[str, Any] = torch.load(model_path, map_location=device, weights_only=False)
 
     if "model_state_dict" not in checkpoint:
         raise ValueError("Invalid checkpoint: missing model_state_dict")

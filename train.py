@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import random
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
@@ -24,7 +32,12 @@ from utils import extract_audio, extract_frames
 from vision import analyze_vision
 from model import DeceptionMLP
 
-DEFAULT_DATASET_ROOT = "/mnt/newvolume/Programming/Python/Deep_Learning/AI_Lie_Detector/Real-life Deception Detection Dataset With Train Test"
+# Prefer an environment variable so this works on any machine.
+# Falls back to a path relative to this script's location.
+DEFAULT_DATASET_ROOT = os.environ.get(
+    "LIE_DETECTOR_DATA_ROOT",
+    str(Path(__file__).parent / "Real-life Deception Detection Dataset With Train Test"),
+)
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 LIE_TOKENS = {"lie", "liar", "deception", "deceptive", "fake", "false"}
@@ -56,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-path", default=_default_output_path("model_full.pt"), help="Output trained model path")
     parser.add_argument("--metrics-path", default=_default_output_path("metrics_full.json"), help="Output metrics JSON path")
     parser.add_argument("--test-size", default=0.2, type=float, help="Fallback split if no usable Test set exists")
+    parser.add_argument("--force-extract", action="store_true", help="Force re-extraction of features even if features.csv exists")
     return parser
 
 
@@ -221,16 +235,35 @@ def train_and_evaluate(df: pd.DataFrame, model_path: Path, metrics_path: Path, t
         else:
             train_df, test_df = train_test_split(df, test_size=test_size, random_state=42, stratify=df["label"])
 
-    X_train = train_df[feature_cols].fillna(0.0).to_numpy(dtype=np.float32)
-    y_train = train_df["label"].to_numpy(dtype=np.int64)
+    # Carve out a 15% validation split from train for early stopping.
+    # Stratify only when both classes are present (small datasets may not allow it).
+    val_frac = 0.15
+    if len(train_df) >= 10 and train_df["label"].nunique() >= 2:
+        train_core_df, val_df = train_test_split(
+            train_df, test_size=val_frac, random_state=42, stratify=train_df["label"]
+        )
+    else:
+        train_core_df, val_df = train_test_split(train_df, test_size=val_frac, random_state=42)
+
+    logger.info(
+        "Dataset split — train: %d, val: %d, test: %d",
+        len(train_core_df), len(val_df), len(test_df),
+    )
+
+    X_train = train_core_df[feature_cols].fillna(0.0).to_numpy(dtype=np.float32)
+    y_train = train_core_df["label"].to_numpy(dtype=np.int64)
+    X_val = val_df[feature_cols].fillna(0.0).to_numpy(dtype=np.float32)
+    y_val = val_df["label"].to_numpy(dtype=np.int64)
     X_test = test_df[feature_cols].fillna(0.0).to_numpy(dtype=np.float32)
     y_test = test_df["label"].to_numpy(dtype=np.int64)
 
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train).astype(np.float32)
+    X_val_scaled = scaler.transform(X_val).astype(np.float32)
     X_test_scaled = scaler.transform(X_test).astype(np.float32)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info("Training on device: %s", device)
     model = DeceptionMLP(input_dim=X_train_scaled.shape[1]).to(device)
 
     X_train_t = torch.from_numpy(X_train_scaled)
@@ -246,8 +279,19 @@ def train_and_evaluate(df: pd.DataFrame, model_path: Path, metrics_path: Path, t
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight_value], device=device))
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
 
-    model.train()
-    for _ in range(80):
+    NUM_EPOCHS = 100
+    PATIENCE = 12
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
+
+    best_val_loss = float("inf")
+    best_state: dict = {}
+    patience_counter = 0
+
+    X_val_t = torch.from_numpy(X_val_scaled).to(device)
+    y_val_t = torch.from_numpy(y_val.astype(np.float32)).to(device)
+
+    for epoch in tqdm(range(NUM_EPOCHS), desc="Training"):
+        model.train()
         for xb, yb in train_loader:
             xb = xb.to(device)
             yb = yb.to(device)
@@ -256,7 +300,26 @@ def train_and_evaluate(df: pd.DataFrame, model_path: Path, metrics_path: Path, t
             loss = criterion(logits, yb)
             loss.backward()
             optimizer.step()
+        scheduler.step()
 
+        # Validation loss for early stopping
+        model.eval()
+        with torch.no_grad():
+            val_logits = model(X_val_t)
+            val_loss = criterion(val_logits, y_val_t).item()
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= PATIENCE:
+                logger.info("Early stopping at epoch %d (best val_loss=%.4f)", epoch + 1, best_val_loss)
+                break
+
+    # Restore the best checkpoint before evaluation
+    model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
         logits_test = model(torch.from_numpy(X_test_scaled).to(device)).cpu().numpy()
@@ -264,8 +327,10 @@ def train_and_evaluate(df: pd.DataFrame, model_path: Path, metrics_path: Path, t
     y_pred = (y_prob >= 0.5).astype(np.int64)
 
     metrics: dict[str, Any] = {
-        "n_train": int(len(train_df)),
+        "n_train": int(len(train_core_df)),
+        "n_val": int(len(val_df)),
         "n_test": int(len(test_df)),
+        "best_val_loss": float(best_val_loss),
         "accuracy": float(accuracy_score(y_test, y_pred)),
         "f1": float(f1_score(y_test, y_pred)),
         "roc_auc": float(roc_auc_score(y_test, y_prob)) if len(np.unique(y_test)) > 1 else None,
@@ -276,7 +341,7 @@ def train_and_evaluate(df: pd.DataFrame, model_path: Path, metrics_path: Path, t
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": best_state,
             "input_dim": X_train_scaled.shape[1],
             "feature_cols": feature_cols,
             "scaler_mean": scaler.mean_.tolist(),
@@ -285,6 +350,7 @@ def train_and_evaluate(df: pd.DataFrame, model_path: Path, metrics_path: Path, t
         model_path,
     )
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    logger.info("Saved best model to %s", model_path)
 
     return metrics
 
@@ -292,55 +358,63 @@ def train_and_evaluate(df: pd.DataFrame, model_path: Path, metrics_path: Path, t
 def main() -> None:
     args = build_parser().parse_args()
 
-    dataset_root = Path(args.dataset_root)
-    if not dataset_root.exists():
-        raise FileNotFoundError(f"Dataset root not found: {dataset_root}")
-
-    cache_dir = Path(args.cache_dir)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    train_files = discover_split_files(dataset_root, "Train")
-    test_files = discover_split_files(dataset_root, "Test")
-    all_samples: list[tuple[str, Path]] = [("train", p) for p in train_files] + [("test", p) for p in test_files]
-
-    if not all_samples:
-        all_videos = _video_files(dataset_root)
-        all_samples = [("train", p) for p in all_videos]
-
-    if args.max_videos > 0:
-        all_samples = balanced_subset(all_samples, args.max_videos)
-
-    extracted_rows: list[dict[str, Any]] = []
-    skipped_no_label = 0
-
-    for split, video_path in tqdm(all_samples, desc="Extracting features"):
-        label = infer_label(video_path)
-        if label is None:
-            skipped_no_label += 1
-            continue
-
-        row = extract_features_for_video(
-            video_path=video_path,
-            split=split,
-            label=label,
-            cache_dir=cache_dir,
-            frame_step=args.frame_step,
-            whisper_model=args.whisper_model,
-            whisper_device=args.whisper_device,
-            max_audio_seconds=args.max_audio_seconds,
-            vision_max_frames=args.vision_max_frames,
-        )
-        if row is not None:
-            extracted_rows.append(row)
-
-    if not extracted_rows:
-        raise ValueError("No labeled samples extracted. Check that file names contain lie/truth tokens.")
-
-    df = pd.DataFrame(extracted_rows)
-
     features_csv = Path(args.features_csv)
-    features_csv.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(features_csv, index=False)
+
+    if features_csv.exists() and not args.force_extract:
+        logger.info("Found existing features at %s. Skipping extraction...", features_csv)
+        df = pd.read_csv(features_csv)
+        skipped_no_label = 0
+    else:
+        dataset_root = Path(args.dataset_root)
+        if not dataset_root.exists():
+            raise FileNotFoundError(f"Dataset root not found: {dataset_root}")
+
+        cache_dir = Path(args.cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        train_files = discover_split_files(dataset_root, "Train")
+        test_files = discover_split_files(dataset_root, "Test")
+        all_samples: list[tuple[str, Path]] = [("train", p) for p in train_files] + [("test", p) for p in test_files]
+
+        if not all_samples:
+            all_videos = _video_files(dataset_root)
+            all_samples = [("train", p) for p in all_videos]
+
+        if args.max_videos > 0:
+            all_samples = balanced_subset(all_samples, args.max_videos)
+
+        logger.info("Processing %d video(s)...", len(all_samples))
+        extracted_rows: list[dict[str, Any]] = []
+        skipped_no_label = 0
+
+        for split, video_path in tqdm(all_samples, desc="Extracting features"):
+            label = infer_label(video_path)
+            if label is None:
+                skipped_no_label += 1
+                continue
+
+            row = extract_features_for_video(
+                video_path=video_path,
+                split=split,
+                label=label,
+                cache_dir=cache_dir,
+                frame_step=args.frame_step,
+                whisper_model=args.whisper_model,
+                whisper_device=args.whisper_device,
+                max_audio_seconds=args.max_audio_seconds,
+                vision_max_frames=args.vision_max_frames,
+            )
+            if row is not None:
+                extracted_rows.append(row)
+
+        if not extracted_rows:
+            raise ValueError("No labeled samples extracted. Check that file names contain lie/truth tokens.")
+
+        df = pd.DataFrame(extracted_rows)
+
+        features_csv.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(features_csv, index=False)
+        logger.info("Saved features to %s (%d rows)", features_csv, len(df))
 
     metrics = train_and_evaluate(df=df, model_path=Path(args.model_path), metrics_path=Path(args.metrics_path), test_size=args.test_size)
 

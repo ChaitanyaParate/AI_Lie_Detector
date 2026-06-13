@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +9,8 @@ import mediapipe as mp
 import numpy as np
 
 from utils import minmax_normalize
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -83,8 +86,11 @@ def _sample_frame_paths(frame_dir: str, max_frames: int) -> list[Path]:
 
 
 def _analyze_vision_with_mediapipe(frame_dir: str, video_fps: float, frame_step: int, max_frames: int) -> VisionResult:
+    # static_image_mode=True is correct here: frames are independent JPEGs loaded from disk,
+    # not a continuous video stream. Using False (tracking mode) gives incorrect results
+    # because it assumes temporal continuity between consecutive process() calls.
     face_mesh = mp.solutions.face_mesh.FaceMesh(
-        static_image_mode=False,
+        static_image_mode=True,
         max_num_faces=1,
         refine_landmarks=True,
         min_detection_confidence=0.5,

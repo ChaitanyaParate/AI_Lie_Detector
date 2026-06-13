@@ -46,9 +46,8 @@ AI_Lie_Detector/
 ├── text_audio.py      # Speech transcription + linguistic & acoustic feature extraction
 ├── vision.py          # Facial landmark analysis (blink rate, eye movement)
 ├── model.py           # Neural network model definition
-├── train.py           # Model training script
+├── train.py           # Model training script (with validation split + early stopping)
 ├── predict.py         # Standalone inference script
-├── loss.py            # Custom loss functions
 ├── utils.py           # Audio/frame extraction helpers + weighted fusion logic
 ├── model_full.pt      # Pre-trained model checkpoint
 ├── requirements.txt   # Python dependencies

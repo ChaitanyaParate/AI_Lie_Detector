@@ -1,18 +1,33 @@
-openai-whisper
-librosa
-mediapipe
-opencv-python
-moviepy
-numpy
-torch
-soundfile
-ffmpeg-python
-pandas
-scikit-learn
-joblib
-tqdm
+# Core ASR
+openai-whisper>=20231117
+
+# Audio processing
+librosa>=0.10,<0.12
+
+# Vision / MediaPipe
+mediapipe>=0.10,<0.11
+opencv-python>=4.8
+
+# Video I/O
+moviepy>=1.0.3
+ffmpeg-python>=0.2.0
+soundfile>=0.12
+
+# ML / DL
+torch>=2.0
+torchvision>=0.15
+scikit-learn>=1.3
+sentence-transformers>=2.2
+
+# Data utilities
+numpy>=1.24
+pandas>=2.0
+tqdm>=4.65
+joblib>=1.3
+
+# Image utilities
+Pillow>=10.0
+albumentations>=1.3
+
+# Dataset download (optional)
 kaggle
-albumentations
-Pillow
-torchvision
-sentence-transformers

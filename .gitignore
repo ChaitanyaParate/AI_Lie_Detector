@@ -1,15 +1,61 @@
-.venv
-Real-life Deception Detection Dataset With Train Test
-dataset_artifacts
-inference_artifacts
-output
-7525374-hd_1080_1920_25fps.mp4
-trial_lie_001.mp4
-W.mp4
-Whats.mp4
-WhatsApp Video 2026-04-07 at 13.52.34.mp4
-lie.zip
-Project_Code.zip
-model_full.pt
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Large binary / data files — use Git LFS or keep locally
+*.zip
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.wav
+
+# Generated artifacts (re-created by running the pipeline)
+outputs/
+dataset_artifacts/
+inference_artifacts/
+artifacts/
+
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
+
+# Datasets & raw video downloads
+bol_raw/
+DOLOS_videos/
+Real-life Deception Detection Dataset With Train Test/
+features_full.csv
+
+# External clones (not part of this project's source)
+AV-Data-Processing/
+DOLOS/
+Hikvision_Video_Downloader/
+
+# Labeling tool state
+bol_labeling_progress.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
